@@ -3,11 +3,19 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+
+  /* Paleta WEG */
+  --weg-blue: #0056A4;
+  --weg-blue-dark: #003E7E;
+  --weg-gray: #F4F6F8;
+  --weg-border: #D9E1E8;
+  --weg-text: #1F2A37;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
