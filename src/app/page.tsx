@@ -89,83 +89,149 @@ export default function Home() {
   const esperando = fila.filter((p) => p.status === "esperando");
 
   return (
-    <main className="min-h-screen bg-gray-50 p-6 font-sans text-gray-800">
-      <div className="max-w-xl mx-auto space-y-8">
-        
-        {/* Cabeçalho */}
-        <div className="text-center">
-          <h1 className="text-3xl font-bold text-blue-600">Fila do Banheiro 🚽</h1>
-          <p className="text-gray-500 mt-2">Coloque seu nome e aguarde a sua vez.</p>
-        </div>
-
-        {/* Formulário para entrar na fila */}
-        <form onSubmit={entrarNaFila} className="flex gap-2 bg-white p-4 rounded-xl shadow-sm border border-gray-100">
-          <input
-            type="text"
-            placeholder="Digite seu nome..."
-            value={nome}
-            onChange={(e) => setNome(e.target.value)}
-            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-            required
-          />
-          <button
-            type="submit"
-            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2 font-medium transition-colors"
-          >
-            <UserPlus size={20} />
-            Entrar
-          </button>
-        </form>
-
-        {/* Status Atual - Quem está no banheiro */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-          <div className="bg-blue-50 px-6 py-4 border-b border-gray-100">
-            <h2 className="font-semibold text-blue-800 flex items-center gap-2">
-              <ArrowRight size={20} />
-              No Banheiro Agora
+    <main className="min-h-screen flex flex-col">
+  
+      {/* Barra superior institucional */}
+      <header
+        className="text-white px-8 py-4 shadow flex justify-between items-center"
+        style={{ background: "var(--weg-blue)" }}
+      >
+        <h1 className="font-semibold text-lg">
+          Sistema de Controle de Fila
+        </h1>
+  
+        <button
+          onClick={async () => {
+            await supabase.auth.signOut();
+            window.location.href = "/login";
+          }}
+          className="text-sm bg-white/20 px-3 py-1 rounded"
+        >
+          Sair
+        </button>
+      </header>
+  
+      {/* Área principal */}
+      <div
+        className="flex-1 p-6"
+        style={{ background: "var(--weg-gray)", color: "var(--weg-text)" }}
+      >
+        <div className="max-w-xl mx-auto space-y-8">
+  
+          {/* Cabeçalho */}
+          <div className="text-center">
+            <h2 className="text-3xl font-bold" style={{ color: "var(--weg-blue)" }}>
+              Fila do Banheiro
             </h2>
+            <p className="mt-2 text-gray-500">
+              Coloque seu nome e aguarde a sua vez.
+            </p>
           </div>
-          <div className="p-6">
-            {noBanheiro ? (
-              <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold text-gray-800">{noBanheiro.nome_aluno}</span>
-                <button
-                  onClick={() => registrarVolta(noBanheiro.id)}
-                  className="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 flex items-center gap-2 transition-colors shadow-sm"
-                >
-                  <CheckCircle2 size={20} />
-                  Voltei!
-                </button>
-              </div>
-            ) : (
-              <p className="text-gray-400 text-center italic">Banheiro livre!</p>
-            )}
-          </div>
-        </div>
-
-        {/* Fila de Espera */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-          <div className="bg-gray-50 px-6 py-4 border-b border-gray-100">
-            <h2 className="font-semibold text-gray-700">Fila de Espera ({esperando.length})</h2>
-          </div>
-          <ul className="divide-y divide-gray-100">
-            {esperando.length > 0 ? (
-              esperando.map((pedido, index) => (
-                <li key={pedido.id} className="px-6 py-4 flex items-center gap-4">
-                  <span className="bg-gray-100 text-gray-500 font-bold rounded-full w-8 h-8 flex items-center justify-center shrink-0">
-                    {index + 1}
+  
+          {/* Formulário */}
+          <form
+            onSubmit={entrarNaFila}
+            className="flex gap-2 bg-white p-4 rounded-xl shadow-sm"
+            style={{ border: "1px solid var(--weg-border)" }}
+          >
+            <input
+              type="text"
+              placeholder="Digite seu nome..."
+              value={nome}
+              onChange={(e) => setNome(e.target.value)}
+              className="flex-1 px-4 py-2 rounded-lg border focus:outline-none"
+              style={{ border: "1px solid var(--weg-border)" }}
+              required
+            />
+  
+            <button
+              type="submit"
+              className="text-white px-4 py-2 rounded-lg flex items-center gap-2 font-medium"
+              style={{ background: "var(--weg-blue)" }}
+            >
+              <UserPlus size={20} />
+              Entrar
+            </button>
+          </form>
+  
+          {/* Usuário atual */}
+          <div
+            className="bg-white rounded-xl shadow-sm overflow-hidden"
+            style={{ border: "1px solid var(--weg-border)" }}
+          >
+            <div
+              className="px-6 py-4 border-b"
+              style={{ background: "#e8f1fb", borderColor: "var(--weg-border)" }}
+            >
+              <h3 className="font-semibold flex items-center gap-2" style={{ color: "var(--weg-blue)" }}>
+                <ArrowRight size={20} />
+                No Banheiro Agora
+              </h3>
+            </div>
+  
+            <div className="p-6">
+              {noBanheiro ? (
+                <div className="flex items-center justify-between">
+                  <span className="text-2xl font-bold">
+                    {noBanheiro.nome_aluno}
                   </span>
-                  <span className="text-lg text-gray-700">{pedido.nome_aluno}</span>
+  
+                  <button
+                    onClick={() => registrarVolta(noBanheiro.id)}
+                    className="text-white px-4 py-2 rounded-lg flex items-center gap-2"
+                    style={{ background: "var(--weg-blue-dark)" }}
+                  >
+                    <CheckCircle2 size={20} />
+                    Voltei
+                  </button>
+                </div>
+              ) : (
+                <p className="text-center italic text-gray-400">
+                  Banheiro livre
+                </p>
+              )}
+            </div>
+          </div>
+  
+          {/* Fila */}
+          <div
+            className="bg-white rounded-xl shadow-sm overflow-hidden"
+            style={{ border: "1px solid var(--weg-border)" }}
+          >
+            <div
+              className="px-6 py-4 border-b"
+              style={{ borderColor: "var(--weg-border)" }}
+            >
+              <h3 className="font-semibold">
+                Fila de Espera ({esperando.length})
+              </h3>
+            </div>
+  
+            <ul className="divide-y" style={{ borderColor: "var(--weg-border)" }}>
+              {esperando.length > 0 ? (
+                esperando.map((pedido, index) => (
+                  <li key={pedido.id} className="px-6 py-4 flex items-center gap-4">
+                    <span
+                      className="font-bold rounded-full w-8 h-8 flex items-center justify-center"
+                      style={{
+                        background: "var(--weg-gray)",
+                        color: "var(--weg-text)",
+                      }}
+                    >
+                      {index + 1}
+                    </span>
+  
+                    <span className="text-lg">{pedido.nome_aluno}</span>
+                  </li>
+                ))
+              ) : (
+                <li className="px-6 py-8 text-center italic text-gray-400">
+                  Ninguém na fila no momento
                 </li>
-              ))
-            ) : (
-              <li className="px-6 py-8 text-center text-gray-400 italic">
-                Ninguém na fila de espera no momento.
-              </li>
-            )}
-          </ul>
+              )}
+            </ul>
+          </div>
         </div>
-
       </div>
     </main>
   );
