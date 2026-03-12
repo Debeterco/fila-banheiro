@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import { 
   UserPlus, CheckCircle2, LogOut, 
-  DoorOpen, PauseCircle, PlayCircle, Trash2, ShieldAlert,
+  DoorOpen, PauseCircle, PlayCircle, Trash2, ArrowUp, ArrowDown, ShieldAlert,
   ClipboardList, XCircle, BookOpen, Users, Plus, ArrowLeft, Settings, LayoutGrid, BarChart3
 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -32,6 +32,12 @@ type Classroom = {
   id: string;
   name: string;
   student_count?: number;
+};
+
+// Tipagem auxiliar para o banco de dados para evitar erros de compilação no Vercel
+type UserClassroomDB = {
+  user_id: string;
+  classroom_id: string;
 };
 
 export default function Home() {
@@ -93,7 +99,7 @@ export default function Home() {
           const { data: turma } = await supabase.from("classrooms").select("*").eq("id", vinculo.classroom_id).single();
           const { data: membros } = await supabase.from("user_classrooms").select("user_id").eq("classroom_id", turma.id);
           if (membros) {
-            const ids = membros.map((m: any) => m.user_id);
+            const ids = membros.map((m: UserClassroomDB) => m.user_id);
             const { data: alunosData } = await supabase.from("users").select("*").in("user_id", ids);
             setAlunosNaTurmaAtual(alunosData || []);
           }
@@ -116,7 +122,7 @@ export default function Home() {
     const { data: vinculos } = await supabase.from("user_classrooms").select("classroom_id");
     if (turmasData) {
       const turmasComContagem = turmasData.map(t => ({
-        ...t, student_count: vinculos ? vinculos.filter((v: any) => v.classroom_id === t.id).length : 0
+        ...t, student_count: vinculos ? vinculos.filter((v: UserClassroomDB) => v.classroom_id === t.id).length : 0
       }));
       setTurmas(turmasComContagem);
     }
@@ -140,10 +146,10 @@ export default function Home() {
       const { data: vinculos } = await supabase.from("user_classrooms").select("user_id, classroom_id");
 
       if (todosAlunos && vinculos) {
-        const vinculadosIds = vinculos.map((v: any) => v.user_id);
-        const alunosDestaTurmaIds = vinculos.filter((v:any) => v.classroom_id === turma.id).map((v:any) => v.user_id);
-        setAlunosSemTurma(todosAlunos.filter((a: any) => !vinculadosIds.includes(a.user_id)));
-        setAlunosNaTurmaAtual(todosAlunos.filter((a: any) => alunosDestaTurmaIds.includes(a.user_id)));
+        const vinculadosIds = vinculos.map((v: UserClassroomDB) => v.user_id);
+        const alunosDestaTurmaIds = vinculos.filter((v: UserClassroomDB) => v.classroom_id === turma.id).map((v: UserClassroomDB) => v.user_id);
+        setAlunosSemTurma(todosAlunos.filter((a: UserDB) => !vinculadosIds.includes(a.user_id)));
+        setAlunosNaTurmaAtual(todosAlunos.filter((a: UserDB) => alunosDestaTurmaIds.includes(a.user_id)));
       }
       setViewMode("settings");
     } finally { setIsProcessing(false); }
@@ -155,7 +161,7 @@ export default function Home() {
     try {
       const { data: vinculos } = await supabase.from("user_classrooms").select("user_id").eq("classroom_id", turma.id);
       if (vinculos && vinculos.length > 0) {
-        const ids = vinculos.map((v: any) => v.user_id);
+        const ids = vinculos.map((v: UserClassroomDB) => v.user_id);
         const { data: alunosData } = await supabase.from("users").select("*").in("user_id", ids);
         setAlunosNaTurmaAtual(alunosData || []);
       } else setAlunosNaTurmaAtual([]);
@@ -264,7 +270,6 @@ export default function Home() {
     if (processingRef.current) return;
     processingRef.current = true; setIsProcessing(true);
     try {
-      // Removida a trava rígida do banco para evitar bugs de desincronização
       await supabase.from("logs").update({ status: "pedido_historico" }).eq("id", pedido.id);
       await supabase.from("logs").insert([{ user_id: pedido.user_id, name: pedido.name, status: "saida", require_time: pedido.require_time, go_time: new Date().toISOString(), description: pedido.description }]);
     } finally { processingRef.current = false; setIsProcessing(false); }
@@ -274,7 +279,6 @@ export default function Home() {
     if (processingRef.current) return;
     processingRef.current = true; setIsProcessing(true);
     try {
-      // Removida a trava rígida do banco para destravar alunos presos
       await supabase.from("logs").update({ status: "saida_historico" }).eq("id", pedido.id);
       await supabase.from("logs").insert([{ user_id: pedido.user_id, name: pedido.name, status: "concluido", require_time: pedido.require_time, go_time: pedido.go_time, back_time: new Date().toISOString(), description: pedido.description }]);
     } finally { processingRef.current = false; setIsProcessing(false); }
@@ -309,6 +313,29 @@ export default function Home() {
     processingRef.current = true; setIsProcessing(true);
     try { await supabase.from("logs").update({ status: "cancelado", description: "Cancelado / Removido" }).eq("id", pedido.id); }
     finally { processingRef.current = false; setIsProcessing(false); }
+  };
+
+  const removerDaFila = async (aluno: LogPedido) => {
+    if (processingRef.current || !currentUser) return;
+    processingRef.current = true; setIsProcessing(true);
+    try { await supabase.from("logs").update({ status: "cancelado", description: `(Removido por ${currentUser.name}) ` + (aluno.description || "") }).eq("id", aluno.id); } 
+    finally { processingRef.current = false; setIsProcessing(false); }
+  };
+
+  const moverPosicao = async (index: number, direcao: "up" | "down") => {
+    if (processingRef.current || !currentUser) return;
+    processingRef.current = true; setIsProcessing(true);
+    try {
+      const atual = filaEsperaOrdenada[index];
+      const outro = filaEsperaOrdenada[direcao === "up" ? index - 1 : index + 1];
+      if (!atual || !outro) return;
+      const tAtual = getEffectiveTime(atual);
+      const tOutro = getEffectiveTime(outro);
+      const newDescAtual = (atual.description || "").replace(/\[OVERRIDE:.*?\]/g, "") + ` [OVERRIDE:${tOutro}]`;
+      const newDescOutro = (outro.description || "").replace(/\[OVERRIDE:.*?\]/g, "") + ` [OVERRIDE:${tAtual}]`;
+      await supabase.from("logs").update({ description: newDescAtual.trim() }).eq("id", atual.id);
+      await supabase.from("logs").update({ description: newDescOutro.trim() }).eq("id", outro.id);
+    } finally { processingRef.current = false; setIsProcessing(false); }
   };
 
   const fazerLogout = async () => {
@@ -386,7 +413,9 @@ export default function Home() {
       {/* CABEÇALHO GERAL */}
       <header className="bg-[#00579D] text-white px-8 py-4 shadow-md flex justify-between items-center z-10">
         <div className="flex items-center gap-4">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo-senai.png" alt="Logo SENAI" className="h-14 sm:h-16 object-contain" onError={(e) => e.currentTarget.style.display = 'none'} />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo-weg.png" alt="Logo WEG" className="h-14 sm:h-16 object-contain" onError={(e) => e.currentTarget.style.display = 'none'} />
         </div>
         <div className="flex items-center gap-6">
@@ -394,7 +423,6 @@ export default function Home() {
             {isPrivileged ? "Docente:" : "Aluno:"} <strong className="font-bold uppercase">{currentUser.name}</strong>
           </span>
           
-          {/* BOTÃO FANTASMA CORRIGIDO: Só aparece se houver uma turma selecionada */}
           {isPrivileged && turmaAtiva && (
             <button
               onClick={() => {
@@ -526,12 +554,12 @@ export default function Home() {
         )}
 
         {/* =========================================================
-            MÓDULO DE FILA DA TURMA (Com Painel Lateral)
+            MÓDULO DE FILA DA TURMA
             ========================================================= */}
         {viewMode === "queue" && turmaAtiva && (
           <div className="flex flex-col xl:flex-row gap-6 items-start animate-in fade-in slide-in-from-bottom-4 duration-500">
             
-            {/* PAINEL RETRÁTIL ESQUERDO: RANKING/ESTATÍSTICAS */}
+            {/* PAINEL RETRÁTIL ESQUERDO: RANKING */}
             {isPrivileged && (
               <div className={`bg-white border-2 border-[#00579D] shadow-md transition-all duration-300 ease-in-out overflow-hidden flex flex-col shrink-0 ${isStatsExpanded ? 'w-full xl:w-[350px]' : 'w-full xl:w-[72px]'} h-fit`}>
                 <button 
@@ -644,7 +672,6 @@ export default function Home() {
                 </section>
 
                 <div className="space-y-6">
-                  {/* SESSÃO FORA DE SALA COM NOVOS BOTÕES PRO PROFESSOR */}
                   <section className="bg-white border-2 border-[#00579D]">
                     <div className="bg-[#00579D] text-white px-4 py-3 font-bold uppercase flex justify-between"><span>Fora de Sala</span><DoorOpen size={18} /></div>
                     <div className="p-6">
@@ -654,19 +681,12 @@ export default function Home() {
                             <p className="font-extrabold text-xl text-[#00579D] uppercase">{noBanheiro.name}</p>
                             <p className="text-sm font-bold text-gray-500 uppercase mt-1">Saída: {formatarHora(noBanheiro.go_time)}</p>
                           </div>
-                          
-                          {/* BOTÕES EXCLUSIVOS PARA PROFESSOR DESBUGAR/CONTROLAR */}
                           {isPrivileged && (
                             <div className="flex gap-2">
-                              <button onClick={() => registrarChegada(noBanheiro)} className="p-3 bg-green-600 text-white hover:bg-green-700 transition-colors rounded-sm" title="Forçar Retorno">
-                                <CheckCircle2 size={18}/>
-                              </button>
-                              <button onClick={() => cancelarPedido(noBanheiro)} className="p-3 bg-red-600 text-white hover:bg-red-700 transition-colors rounded-sm" title="Excluir Registro (Cancelar)">
-                                <Trash2 size={18}/>
-                              </button>
+                              <button onClick={() => registrarChegada(noBanheiro)} className="p-3 bg-green-600 text-white hover:bg-green-700 transition-colors rounded-sm" title="Forçar Retorno"><CheckCircle2 size={18}/></button>
+                              <button onClick={() => cancelarPedido(noBanheiro)} className="p-3 bg-red-600 text-white hover:bg-red-700 transition-colors rounded-sm" title="Excluir Registro (Bugado)"><Trash2 size={18}/></button>
                             </div>
                           )}
-
                         </div>
                       ) : <p className="text-center text-gray-500 font-medium italic uppercase text-sm">Ninguém fora da sala</p>}
                     </div>
@@ -699,7 +719,6 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* HISTÓRICO ORIGINAL DE VOLTA */}
               {isPrivileged && historicoDaTurma.length > 0 && (
                 <section className="bg-white shadow-md border-t-8 border-[#2B2B2B] mt-8">
                   <div className="bg-[#2B2B2B] text-white px-6 py-4 font-bold uppercase tracking-widest">Histórico Completo da Sala</div>
