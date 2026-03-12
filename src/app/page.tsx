@@ -34,12 +34,6 @@ type Classroom = {
   student_count?: number;
 };
 
-// Tipagem auxiliar para o banco de dados para evitar erros de compilação no Vercel
-type UserClassroomDB = {
-  user_id: string;
-  classroom_id: string;
-};
-
 export default function Home() {
   const [todosLogsAtivos, setTodosLogsAtivos] = useState<LogPedido[]>([]);
   const [historicoCompleto, setHistoricoCompleto] = useState<LogPedido[]>([]);
@@ -99,7 +93,8 @@ export default function Home() {
           const { data: turma } = await supabase.from("classrooms").select("*").eq("id", vinculo.classroom_id).single();
           const { data: membros } = await supabase.from("user_classrooms").select("user_id").eq("classroom_id", turma.id);
           if (membros) {
-            const ids = membros.map((m: UserClassroomDB) => m.user_id);
+            // CORREÇÃO: TypeScript deduz o tipo sozinho aqui
+            const ids = membros.map((m) => m.user_id);
             const { data: alunosData } = await supabase.from("users").select("*").in("user_id", ids);
             setAlunosNaTurmaAtual(alunosData || []);
           }
@@ -122,7 +117,9 @@ export default function Home() {
     const { data: vinculos } = await supabase.from("user_classrooms").select("classroom_id");
     if (turmasData) {
       const turmasComContagem = turmasData.map(t => ({
-        ...t, student_count: vinculos ? vinculos.filter((v: UserClassroomDB) => v.classroom_id === t.id).length : 0
+        ...t, 
+        // CORREÇÃO: TypeScript deduz o tipo do "v" sozinho aqui também
+        student_count: vinculos ? vinculos.filter((v) => v.classroom_id === t.id).length : 0
       }));
       setTurmas(turmasComContagem);
     }
@@ -146,10 +143,11 @@ export default function Home() {
       const { data: vinculos } = await supabase.from("user_classrooms").select("user_id, classroom_id");
 
       if (todosAlunos && vinculos) {
-        const vinculadosIds = vinculos.map((v: UserClassroomDB) => v.user_id);
-        const alunosDestaTurmaIds = vinculos.filter((v: UserClassroomDB) => v.classroom_id === turma.id).map((v: UserClassroomDB) => v.user_id);
-        setAlunosSemTurma(todosAlunos.filter((a: UserDB) => !vinculadosIds.includes(a.user_id)));
-        setAlunosNaTurmaAtual(todosAlunos.filter((a: UserDB) => alunosDestaTurmaIds.includes(a.user_id)));
+        // CORREÇÃO: Deixando o TypeScript inferir os tipos
+        const vinculadosIds = vinculos.map((v) => v.user_id);
+        const alunosDestaTurmaIds = vinculos.filter((v) => v.classroom_id === turma.id).map((v) => v.user_id);
+        setAlunosSemTurma(todosAlunos.filter((a) => !vinculadosIds.includes(a.user_id)));
+        setAlunosNaTurmaAtual(todosAlunos.filter((a) => alunosDestaTurmaIds.includes(a.user_id)));
       }
       setViewMode("settings");
     } finally { setIsProcessing(false); }
@@ -161,7 +159,7 @@ export default function Home() {
     try {
       const { data: vinculos } = await supabase.from("user_classrooms").select("user_id").eq("classroom_id", turma.id);
       if (vinculos && vinculos.length > 0) {
-        const ids = vinculos.map((v: UserClassroomDB) => v.user_id);
+        const ids = vinculos.map((v) => v.user_id);
         const { data: alunosData } = await supabase.from("users").select("*").in("user_id", ids);
         setAlunosNaTurmaAtual(alunosData || []);
       } else setAlunosNaTurmaAtual([]);
@@ -672,6 +670,7 @@ export default function Home() {
                 </section>
 
                 <div className="space-y-6">
+                  {/* SESSÃO FORA DE SALA COM NOVOS BOTÕES PRO PROFESSOR */}
                   <section className="bg-white border-2 border-[#00579D]">
                     <div className="bg-[#00579D] text-white px-4 py-3 font-bold uppercase flex justify-between"><span>Fora de Sala</span><DoorOpen size={18} /></div>
                     <div className="p-6">
@@ -681,6 +680,7 @@ export default function Home() {
                             <p className="font-extrabold text-xl text-[#00579D] uppercase">{noBanheiro.name}</p>
                             <p className="text-sm font-bold text-gray-500 uppercase mt-1">Saída: {formatarHora(noBanheiro.go_time)}</p>
                           </div>
+                          
                           {isPrivileged && (
                             <div className="flex gap-2">
                               <button onClick={() => registrarChegada(noBanheiro)} className="p-3 bg-green-600 text-white hover:bg-green-700 transition-colors rounded-sm" title="Forçar Retorno"><CheckCircle2 size={18}/></button>
@@ -719,6 +719,7 @@ export default function Home() {
                 </div>
               </div>
 
+              {/* HISTÓRICO ORIGINAL DE VOLTA */}
               {isPrivileged && historicoDaTurma.length > 0 && (
                 <section className="bg-white shadow-md border-t-8 border-[#2B2B2B] mt-8">
                   <div className="bg-[#2B2B2B] text-white px-6 py-4 font-bold uppercase tracking-widest">Histórico Completo da Sala</div>
