@@ -64,11 +64,24 @@ export default function Home() {
 
   useEffect(() => {
     if (!currentUser) return;
-    const channel = supabase.channel("realtime_logs").on(
-      "postgres_changes", { event: "*", schema: "public", table: "logs" },
-      () => carregarDados(currentUser)
-    ).subscribe();
-    return () => { supabase.removeChannel(channel); };
+
+    const channel = supabase.channel("realtime_logs")
+      .on(
+        "postgres_changes", 
+        { event: "*", schema: "public", table: "logs" },
+        (payload) => {
+          console.log("🔥 Mudança detectada no DB!", payload);
+          carregarDados(currentUser);
+        }
+      )
+      .subscribe((status) => {
+        console.log("📡 Status da Inscrição Realtime:", status);
+        // O status deve ser "SUBSCRIBED" se estiver tudo certo
+      });
+
+    return () => { 
+      supabase.removeChannel(channel); 
+    };
   }, [currentUser]);
 
   // ====================================================
