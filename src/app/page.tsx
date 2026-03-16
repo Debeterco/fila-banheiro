@@ -1140,6 +1140,9 @@ export default function Home() {
         )}
 
       </div>
+      <footer className="bg-[#2B2B2B] text-white text-center text-xs py-4 font-bold tracking-widest uppercase border-t-2 border-gray-600">
+        © {new Date().getFullYear()} WEG / SENAI • Sistema de Controle
+      </footer>
     </main>
   );
 }
