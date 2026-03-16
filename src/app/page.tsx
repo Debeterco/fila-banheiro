@@ -211,7 +211,7 @@ export default function Home() {
 
       if (listaTodosProfs && vinculosProfs) {
         setTodosProfessores(listaTodosProfs);
-        const profsDestaTurmaIds = vinculosProfs.map((v: ClassroomTeacherDB) => v.user_id);
+        const profsDestaTurmaIds = vinculosProfs.map((v: any) => v.user_id);
         setProfessoresNaTurmaAtual(listaTodosProfs.filter((p: UserDB) => profsDestaTurmaIds.includes(p.user_id)));
       }
 
