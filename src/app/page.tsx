@@ -31,6 +31,8 @@ export default function Home() {
 
   const processingRef = useRef(false);
   const realtimeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Ref sempre atualizada — evita closure stale no realtime
+  const currentUserRef = useRef<UserDB | null>(null);
   const router = useRouter();
 
   type ViewMode = "dashboard" | "settings" | "queue" | "no_class" | "admin_panel";
@@ -201,19 +203,36 @@ export default function Home() {
 
   useEffect(() => {
     if (!currentUser) return;
-    // Canal ÚNICO por usuário — reduz conexões à metade (crítico no free tier: limite 200)
-    const channel = supabase.channel(`rt_user_${currentUser.user_id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "logs" }, () => {
-        if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
-        realtimeDebounceRef.current = setTimeout(() => carregarDados(currentUser), 200);
-      })
+
+    const dispararRecarregar = () => {
+      // Usa a ref para ter sempre o usuário mais recente — sem closure stale
+      if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
+      realtimeDebounceRef.current = setTimeout(() => {
+        if (currentUserRef.current) carregarDados(currentUserRef.current);
+      }, 300);
+    };
+
+    const channel = supabase
+      .channel(`rt_fila_${currentUser.user_id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "logs" }, dispararRecarregar)
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "classrooms" }, (payload) => {
         setTurmaAtiva(prev => prev && prev.id === payload.new.id
           ? { ...prev, qtd_5s: payload.new.qtd_5s, cooldown_minutes: payload.new.cooldown_minutes, time_limit_minutes: payload.new.time_limit_minutes }
           : prev
         );
       })
-      .subscribe();
+      .on("system", {}, (payload: any) => {
+        // Reconexão após queda do WebSocket — re-sincroniza estado
+        if (payload?.extension === "postgres_changes" && payload?.status === "SUBSCRIBED") {
+          dispararRecarregar();
+        }
+      })
+      .subscribe((status) => {
+        // Se a assinatura falhar, tenta recarregar assim que conectar
+        if (status === "SUBSCRIBED") {
+          dispararRecarregar();
+        }
+      });
 
     return () => {
       if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
@@ -239,32 +258,61 @@ export default function Home() {
   }, [currentUser]);
 
   const verificarLogin = useCallback(async () => {
-    const { data: { session } } = await supabase.auth.getSession();
+    // Round 1: session e dados do usuário em paralelo
+    const [{ data: { session } }, ] = await Promise.all([
+      supabase.auth.getSession(),
+    ]);
     if (!session) return router.push("/login");
-    const { data: usuarioDB } = await supabase.from("users").select("user_id, name, acess_level, email, fives_count").eq("user_id", session.user.id).single();
-    if (usuarioDB) {
-      setCurrentUser(usuarioDB as UserDB);
-      carregarDados(usuarioDB as UserDB);
-      // Registra o último login para controle de inatividade
-      supabase.from("users").update({ last_login: new Date().toISOString() }).eq("user_id", session.user.id).then(() => {});
-      if (usuarioDB.acess_level === "admin" || usuarioDB.acess_level === "Teacher") {
-        await carregarDashboard(usuarioDB as UserDB); setViewMode("dashboard");
-      } else {
-        const { data: vinculo } = await supabase.from("user_classrooms").select("classroom_id").eq("user_id", usuarioDB.user_id).maybeSingle();
-        if (vinculo) {
-          // Turma e membros em paralelo — corta latência de login do aluno pela metade
-          const [{ data: turma }, { data: membros }] = await Promise.all([
-            supabase.from("classrooms").select("*").eq("id", vinculo.classroom_id).single(),
-            supabase.from("user_classrooms").select("user_id").eq("classroom_id", vinculo.classroom_id),
-          ]);
-          if (membros && membros.length > 0) {
-            const { data: alunosData } = await supabase.from("users").select("user_id, name, acess_level, fives_count").in("user_id", membros.map(m => m.user_id));
-            setAlunosNaTurmaAtual(alunosData || []);
-          }
-          setTurmaAtiva(turma); setViewMode("queue");
-        } else { setViewMode("no_class"); }
+
+    const { data: usuarioDB } = await supabase
+      .from("users")
+      .select("user_id, name, acess_level, email, fives_count")
+      .eq("user_id", session.user.id)
+      .single();
+
+    if (!usuarioDB) { fazerLogout(); return; }
+
+    const usr = usuarioDB as UserDB;
+    setCurrentUser(usr);
+    currentUserRef.current = usr;
+
+    // last_login: fire-and-forget, nunca bloqueia
+    supabase.from("users").update({ last_login: new Date().toISOString() }).eq("user_id", session.user.id).then(() => {});
+
+    if (usr.acess_level === "admin" || usr.acess_level === "Teacher") {
+      // Round 2 (privilegiados): logs e dashboard em paralelo
+      await Promise.all([
+        carregarDados(usr),
+        carregarDashboard(usr),
+      ]);
+      setViewMode("dashboard");
+    } else {
+      // Round 2 (alunos): vinculo e logs ativos em paralelo
+      const [{ data: vinculo }] = await Promise.all([
+        supabase.from("user_classrooms").select("classroom_id").eq("user_id", usr.user_id).maybeSingle(),
+        carregarDados(usr),
+      ]);
+
+      if (!vinculo) { setViewMode("no_class"); return; }
+
+      // Round 3 (alunos): turma, membros e lista de alunos em paralelo
+      const [{ data: turma }, { data: membros }] = await Promise.all([
+        supabase.from("classrooms").select("*").eq("id", vinculo.classroom_id).single(),
+        supabase.from("user_classrooms").select("user_id").eq("classroom_id", vinculo.classroom_id),
+      ]);
+
+      if (membros && membros.length > 0) {
+        // Busca nomes dos alunos sem bloquear o setViewMode
+        supabase.from("users")
+          .select("user_id, name, acess_level, fives_count")
+          .in("user_id", membros.map((m: { user_id: string }) => m.user_id))
+          .then(({ data }) => setAlunosNaTurmaAtual(data || []));
       }
-    } else { fazerLogout(); }
+
+      // Mostra a fila imediatamente — lista de alunos carrega em background
+      setTurmaAtiva(turma);
+      setViewMode("queue");
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => { verificarLogin(); }, [verificarLogin]);
@@ -1193,9 +1241,6 @@ export default function Home() {
           </>
         )}
       </div>
-      <footer className="bg-[#2B2B2B] text-white text-center text-xs py-4 font-bold tracking-widest uppercase border-t-2 border-gray-600">
-        © {new Date().getFullYear()} WEG / SENAI • Sistema de Controle
-      </footer>
     </main>
   );
 }
