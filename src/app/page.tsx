@@ -28,6 +28,8 @@ export default function Home() {
   const [ultimoRetornoDoAluno, setUltimoRetornoDoAluno] = useState<LogPedido | null>(null);
   // Segundos restantes do cooldown — atualizado a cada 1s localmente, sem bater no banco
   const [cooldownSecondsLeft, setCooldownSecondsLeft] = useState(0);
+  // Logs concluídos de hoje — filtrados por turma no useMemo abaixo
+  const [logsConcluidosHoje, setLogsConcluidosHoje] = useState<{ user_id: string; name: string }[]>([]);
 
   const processingRef = useRef(false);
   const realtimeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -167,36 +169,59 @@ export default function Home() {
         .maybeSingle();
 
       setUltimoRetornoDoAluno(ultimoRetorno as LogPedido | null);
+
+      // Busca concluídos de hoje com user_id — filtro por turma feito no useMemo
+      const hojeInicio = new Date(); hojeInicio.setHours(0, 0, 0, 0);
+      const { data: concluidosHoje } = await supabase
+        .from("logs")
+        .select("user_id, name")
+        .eq("status", "concluido")
+        .gte("go_time", hojeInicio.toISOString());
+
+      setLogsConcluidosHoje((concluidosHoje || []) as { user_id: string; name: string }[]);
+
       setHistoricoCompleto([]);
       return;
     }
 
     // ── PROFESSORES / ADMIN: versão completa com histórico ──
-    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+    // Histórico dos últimos 30 dias para o relatório por dia funcionar completo
+    const trintaDiasAtras = new Date();
+    trintaDiasAtras.setDate(trintaDiasAtras.getDate() - 30);
+    trintaDiasAtras.setHours(0, 0, 0, 0);
+
     const [{ data: ativos }, { data: historico }] = await Promise.all([
       supabase.from("logs")
         .select("id, user_id, name, status, require_time, go_time, back_time, description, users(acess_level)")
         .in("status", ["pedido", "saida", "pausado"]),
       supabase.from("logs")
         .select("id, user_id, name, status, require_time, go_time, back_time, description, users(acess_level)")
-        .gte("require_time", hoje.toISOString())
+        .gte("require_time", trintaDiasAtras.toISOString())
         .not("status", "in", "(pedido,saida,pausado,auditoria)")
         .order("require_time", { ascending: false })
-        .limit(300),
+        .limit(500),
     ]);
-    const data = [...(ativos || []), ...(historico || [])];
-    const logsData = data as unknown as LogPedido[];
-    setTodosLogsAtivos(logsData.filter(p => ["pedido", "saida", "pausado"].includes(p.status)).reverse());
-    const meuUltimoRetorno = logsData
+    const ativosData = (ativos || []) as unknown as LogPedido[];
+    const historicoData = (historico || []) as unknown as LogPedido[];
+
+    // Ativos e histórico separados — evita variação visual no count do histórico
+    // quando admin/prof insere log ativo (pedido/saida)
+    setTodosLogsAtivos(ativosData.slice().reverse());
+
+    // Cooldown: busca só no histórico (concluido)
+    const meuUltimoRetorno = historicoData
       .filter(l => l.user_id === usuario.user_id && l.status === "concluido" && l.back_time)
       .sort((a, b) => new Date(b.back_time!).getTime() - new Date(a.back_time!).getTime())[0] ?? null;
     setUltimoRetornoDoAluno(meuUltimoRetorno);
+
     const getActionTime = (log: LogPedido) => {
       if (log.status.includes("saida")) return new Date(log.go_time || log.require_time).getTime();
       if (log.status === "concluido") return new Date(log.back_time || log.require_time).getTime();
       return new Date(log.require_time).getTime();
     };
-    const sorted = [...logsData].sort((a, b) => getActionTime(b) - getActionTime(a));
+    // historicoCompleto usa APENAS o histórico — sem misturar logs ativos
+    // Isso garante count estável mesmo quando admin/prof está na fila
+    const sorted = [...historicoData].sort((a, b) => getActionTime(b) - getActionTime(a));
     if (usuario.acess_level === "admin") setHistoricoCompleto(sorted.filter(l => l.status !== "auditoria"));
     else setHistoricoCompleto(sorted.filter(l => l.status !== "auditoria" && (l.users?.acess_level === "aluno" || l.users?.acess_level === "Student")));
   }, []);
@@ -460,8 +485,11 @@ export default function Home() {
 
   // Derivados da fila (memoizados)
   const logsDaTurmaAtiva = useMemo(() => todosLogsAtivos.filter(log =>
+    // Log de pausa desta turma — sempre visível
     (log.status === "pausado" && log.description?.includes(`[TURMA:${turmaAtiva?.id}]`)) ||
+    // Log de aluno desta turma — sempre visível
     alunosNaTurmaAtual.some(a => a.user_id === log.user_id) ||
+    // Log do próprio usuário logado (admin/professor também podem requisitar)
     (log.user_id === currentUser?.user_id && log.status !== "pausado")
   ), [todosLogsAtivos, turmaAtiva, alunosNaTurmaAtual, currentUser]);
 
@@ -760,18 +788,32 @@ export default function Home() {
   const historico5SDaTurma = useMemo(() => historicoCompleto.filter(l => l.status === "5s_history" && l.description?.includes(`[TURMA:${turmaAtiva?.name}]`)), [historicoCompleto, turmaAtiva?.name]);
 
   // Relatórios (memoizados)
+  // resumoHojeAluno: filtra logsConcluidosHoje apenas por membros da turma atual
+  const resumoHojeAluno = useMemo(() => {
+    const idsAlunos = new Set(alunosNaTurmaAtual.map(a => a.user_id));
+    const mapa: Record<string, { nome: string; idas: number }> = {};
+    logsConcluidosHoje.forEach(l => {
+      if (!idsAlunos.has(l.user_id)) return; // ignora quem não é da turma
+      if (!mapa[l.user_id]) mapa[l.user_id] = { nome: l.name, idas: 0 };
+      mapa[l.user_id].idas += 1;
+    });
+    return Object.values(mapa).sort((a, b) => b.idas - a.idas);
+  }, [logsConcluidosHoje, alunosNaTurmaAtual]);
+
   const gerarResumoDoDia = useMemo(() => {
     const hoje = new Date().toLocaleDateString("pt-BR");
+    const idsAlunos = new Set(alunosNaTurmaAtual.map(a => a.user_id));
     const mapa: Record<string, { nome: string; idas: number; tempoTotal: number }> = {};
     historicoDaTurma.forEach(log => {
       if (log.status !== "concluido" || !log.go_time || !log.back_time) return;
       if (new Date(log.go_time).toLocaleDateString("pt-BR") !== hoje) return;
+      if (!idsAlunos.has(log.user_id)) return; // exclui admin/professor do resumo
       const t = Math.round((new Date(log.back_time).getTime() - new Date(log.go_time).getTime()) / 60000);
       if (!mapa[log.user_id]) mapa[log.user_id] = { nome: log.name, idas: 0, tempoTotal: 0 };
       mapa[log.user_id].idas += 1; mapa[log.user_id].tempoTotal += t;
     });
     return Object.values(mapa).map(i => ({ ...i, mediaTempo: i.idas > 0 ? Math.round(i.tempoTotal / i.idas) : 0 })).sort((a, b) => b.idas - a.idas);
-  }, [historicoDaTurma]);
+  }, [historicoDaTurma, alunosNaTurmaAtual]);
 
   const gerarRelatorioTurma = useMemo(() => {
     const porData: Record<string, { data: string; dataISO: string; alunos: { name: string; goTime: string; backTime: string; tempoMin: number }[]; resumoPorAluno: Record<string, { name: string; idas: number; tempoTotal: number }>; }> = {};
@@ -1015,10 +1057,30 @@ export default function Home() {
                 <div className={`transition-opacity duration-300 ${isStatsExpanded ? "opacity-100" : "opacity-0 h-0 overflow-hidden"}`}>
                   {isStatsExpanded && (
                     <div className="p-4 max-h-[600px] overflow-y-auto">
-                      <ul className="space-y-3">
-                        {gerarResumoDoDia.length === 0 ? <p className="text-sm text-gray-500 font-bold text-center mt-4">Nenhum aluno foi ao banheiro hoje.</p>
-                          : gerarResumoDoDia.map((e, idx) => <li key={idx} className="flex justify-between items-center p-3 bg-[#F4F4F4] border-l-4 border-[#00579D]"><div><p className="font-black text-[#2B2B2B] uppercase text-sm">{idx + 1}º {e.nome}</p><p className="text-xs font-bold text-[#00579D]">{e.idas} {e.idas === 1 ? "ida" : "idas"}</p></div><div className="text-right"><p className="text-sm font-bold text-gray-700">{e.tempoTotal} min</p><p className="text-[10px] font-bold text-gray-400 uppercase">Média: {e.mediaTempo} min</p></div></li>)}
-                      </ul>
+                      {isPrivileged ? (
+                        // Professores/Admin: veem nome + idas + tempo
+                        <ul className="space-y-3">
+                          {gerarResumoDoDia.length === 0
+                            ? <p className="text-sm text-gray-500 font-bold text-center mt-4">Nenhum aluno foi ao banheiro hoje.</p>
+                            : gerarResumoDoDia.map((e, idx) => (
+                              <li key={idx} className="flex justify-between items-center p-3 bg-[#F4F4F4] border-l-4 border-[#00579D]">
+                                <div><p className="font-black text-[#2B2B2B] uppercase text-sm">{idx + 1}º {e.nome}</p><p className="text-xs font-bold text-[#00579D]">{e.idas} {e.idas === 1 ? "ida" : "idas"}</p></div>
+                                <div className="text-right"><p className="text-sm font-bold text-gray-700">{e.tempoTotal} min</p><p className="text-[10px] font-bold text-gray-400 uppercase">Média: {e.mediaTempo} min</p></div>
+                              </li>
+                            ))}
+                        </ul>
+                      ) : (
+                        // Alunos: veem apenas nome + idas (sem tempos — privacidade)
+                        <ul className="space-y-3">
+                          {resumoHojeAluno.length === 0
+                            ? <p className="text-sm text-gray-500 font-bold text-center mt-4">Nenhum aluno foi ao banheiro hoje.</p>
+                            : resumoHojeAluno.map((e, idx) => (
+                              <li key={idx} className="flex justify-between items-center p-3 bg-[#F4F4F4] border-l-4 border-[#00579D]">
+                                <div><p className="font-black text-[#2B2B2B] uppercase text-sm">{idx + 1}º {e.nome}</p><p className="text-xs font-bold text-[#00579D]">{e.idas} {e.idas === 1 ? "ida" : "idas"}</p></div>
+                              </li>
+                            ))}
+                        </ul>
+                      )}
                     </div>
                   )}
                 </div>
