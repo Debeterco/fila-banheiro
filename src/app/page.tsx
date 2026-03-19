@@ -204,41 +204,60 @@ export default function Home() {
   useEffect(() => {
     if (!currentUser) return;
 
-    const dispararRecarregar = () => {
-      // Usa a ref para ter sempre o usuário mais recente — sem closure stale
+    const recarregar = () => {
       if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
       realtimeDebounceRef.current = setTimeout(() => {
         if (currentUserRef.current) carregarDados(currentUserRef.current);
       }, 300);
     };
 
+    // ── Canal Realtime ──────────────────────────────────────────────────
     const channel = supabase
-      .channel(`rt_fila_${currentUser.user_id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "logs" }, dispararRecarregar)
+      .channel("rt_fila_global")
+      .on("postgres_changes", { event: "*", schema: "public", table: "logs" }, recarregar)
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "classrooms" }, (payload) => {
         setTurmaAtiva(prev => prev && prev.id === payload.new.id
           ? { ...prev, qtd_5s: payload.new.qtd_5s, cooldown_minutes: payload.new.cooldown_minutes, time_limit_minutes: payload.new.time_limit_minutes }
           : prev
         );
       })
-      .on("system", {}, (payload: any) => {
-        // Reconexão após queda do WebSocket — re-sincroniza estado
-        if (payload?.extension === "postgres_changes" && payload?.status === "SUBSCRIBED") {
-          dispararRecarregar();
-        }
-      })
-      .subscribe((status) => {
-        // Se a assinatura falhar, tenta recarregar assim que conectar
-        if (status === "SUBSCRIBED") {
-          dispararRecarregar();
-        }
-      });
+      .subscribe();
+
+    // ── Polling de fallback: 5s enquanto aba visível ────────────────────
+    // Garante atualização mesmo se o WebSocket não disparar
+    const pollingInterval = setInterval(() => {
+      if (document.visibilityState === "visible" && currentUserRef.current) {
+        carregarDados(currentUserRef.current);
+      }
+    }, 5000);
+
+    // ── Re-fetch imediato ao voltar para a aba ──────────────────────────
+    const aoVoltarParaAba = () => {
+      if (document.visibilityState === "visible" && currentUserRef.current) {
+        carregarDados(currentUserRef.current);
+      }
+    };
+    document.addEventListener("visibilitychange", aoVoltarParaAba);
 
     return () => {
       if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
+      clearInterval(pollingInterval);
+      document.removeEventListener("visibilitychange", aoVoltarParaAba);
       supabase.removeChannel(channel);
     };
   }, [currentUser, carregarDados]);
+
+  // Avisa se o usuário tentar fechar/recarregar com operação em andamento
+  useEffect(() => {
+    const avisar = (e: BeforeUnloadEvent) => {
+      if (processingRef.current) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", avisar);
+    return () => window.removeEventListener("beforeunload", avisar);
+  }, []);
 
   const carregarDashboard = useCallback(async (usuario: UserDB | null = null) => {
     const usr = usuario ?? currentUser;
