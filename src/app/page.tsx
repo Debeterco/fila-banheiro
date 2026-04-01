@@ -784,16 +784,38 @@ export default function Home() {
   };
 
   const darMinhaVez = async () => {
-    if (processingRef.current || !currentUser || !meuPedido) return;
-    const meuIndex = filaEsperaOrdenada.findIndex(p => p.id === meuPedido.id);
+    if (processingRef.current || !currentUser) return;
+
+    // Posição atual do usuário na fila (sempre fresco do estado)
+    const meuIndex = filaEsperaOrdenada.findIndex(p => p.user_id === currentUser.user_id);
+
+    // Só executa se o usuário está na fila E tem alguém atrás dele
     if (meuIndex < 0 || meuIndex >= filaEsperaOrdenada.length - 1) return;
+
     processingRef.current = true; setIsProcessing(true);
     try {
+      const eu = filaEsperaOrdenada[meuIndex];
       const proximo = filaEsperaOrdenada[meuIndex + 1];
+
+      // Busca os require_time frescos do banco para evitar valores de cache
+      const [{ data: euDB }, { data: proximoDB }] = await Promise.all([
+        supabase.from("logs").select("id, require_time").eq("id", eu.id).single(),
+        supabase.from("logs").select("id, require_time").eq("id", proximo.id).single(),
+      ]);
+      if (!euDB || !proximoDB) return;
+
+      // Troca direta dos require_time — sem nenhum OVERRIDE, sem lógica extra
+      // Quem estava atrás passa para frente (recebe meu require_time mais antigo)
+      // Eu vou para trás (recebo o require_time mais novo do próximo)
       await Promise.all([
-        supabase.from("logs").update({ description: ((meuPedido.description || "").replace(/\[OVERRIDE:.*?\]/g, "") + ` [OVERRIDE:${getEffectiveTime(proximo)}]`).trim() }).eq("id", meuPedido.id),
-        supabase.from("logs").update({ description: ((proximo.description || "").replace(/\[OVERRIDE:.*?\]/g, "") + ` [OVERRIDE:${getEffectiveTime(meuPedido)}]`).trim() }).eq("id", proximo.id),
-        supabase.from("logs").insert([{ user_id: currentUser.user_id, name: currentUser.name, status: "auditoria", description: `${currentUser.name} cedeu sua vez para ${proximo.name} na fila` }]),
+        supabase.from("logs").update({ require_time: proximoDB.require_time }).eq("id", euDB.id),
+        supabase.from("logs").update({ require_time: euDB.require_time }).eq("id", proximoDB.id),
+        supabase.from("logs").insert([{
+          user_id: currentUser.user_id,
+          name: currentUser.name,
+          status: "auditoria",
+          description: `${currentUser.name} cedeu sua vez para ${proximo.name} na fila`,
+        }]),
       ]);
     } finally { processingRef.current = false; setIsProcessing(false); }
   };
@@ -1122,16 +1144,19 @@ export default function Home() {
                             ))}
                         </ul>
                       ) : (
-                        // Alunos: veem apenas nome + idas (sem tempos — privacidade)
-                        <ul className="space-y-3">
-                          {resumoHojeAluno.length === 0
-                            ? <p className="text-sm text-gray-500 font-bold text-center mt-4">Nenhum aluno foi ao banheiro hoje.</p>
-                            : resumoHojeAluno.map((e, idx) => (
-                              <li key={idx} className="flex justify-between items-center p-3 bg-[#F4F4F4] border-l-4 border-[#00579D]">
-                                <div><p className="font-black text-[#2B2B2B] uppercase text-sm">{idx + 1}º {e.nome}</p><p className="text-xs font-bold text-[#00579D]">{e.idas} {e.idas === 1 ? "ida" : "idas"}</p></div>
-                              </li>
-                            ))}
-                        </ul>
+                        // Alunos: veem APENAS o próprio resumo do dia
+                        (() => {
+                          const meuResumo = resumoHojeAluno.find(e => e.nome === currentUser.name);
+                          return meuResumo ? (
+                            <div className="flex flex-col items-center justify-center gap-3 mt-4 p-4 bg-[#F4F4F4] border-l-4 border-[#00579D]">
+                              <p className="font-black text-[#2B2B2B] uppercase text-sm text-center">{meuResumo.nome}</p>
+                              <p className="text-3xl font-black text-[#00579D]">{meuResumo.idas}</p>
+                              <p className="text-xs font-bold text-gray-500 uppercase">{meuResumo.idas === 1 ? "ida hoje" : "idas hoje"}</p>
+                            </div>
+                          ) : (
+                            <p className="text-sm text-gray-500 font-bold text-center mt-4">Você ainda não foi ao banheiro hoje.</p>
+                          );
+                        })()
                       )}
                     </div>
                   )}
@@ -1233,7 +1258,7 @@ export default function Home() {
                                 </div>
                                 <div className="flex gap-2 items-center">
                                   {podeDarVez && (
-                                    <button onClick={darMinhaVez} disabled={isProcessing} title="Deixar a pessoa de trás passar na minha frente" className="flex items-center gap-1 px-3 py-2 bg-amber-500 text-white font-bold uppercase text-xs hover:bg-amber-600 border-b-2 border-amber-700 active:border-b-0 active:translate-y-0.5 disabled:opacity-50">
+                                    <button onClick={darMinhaVez} disabled={isProcessing} title="Deixar a pessoa de trás passar na minha frente" className="flex items-center gap-1 px-3 py-2 bg-[#00579D] text-white font-bold uppercase text-xs hover:bg-[#003865] border-b-2 border-[#003865] active:border-b-0 active:translate-y-0.5 disabled:opacity-50">
                                       <ChevronsDown size={14} /> Dar vez
                                     </button>
                                   )}
