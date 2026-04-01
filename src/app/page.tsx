@@ -32,7 +32,8 @@ export default function Home() {
   const [logsConcluidosHoje, setLogsConcluidosHoje] = useState<{ user_id: string; name: string }[]>([]);
 
   const processingRef = useRef(false);
-  const chegadaEmProcessoRef = useRef<Set<string>>(new Set());
+  // useState em vez de useRef — garante re-render imediato para desabilitar o botão no primeiro clique
+  const [chegadaEmProcesso, setChegadaEmProcesso] = useState<Set<string>>(new Set());
   const realtimeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Ref sempre atualizada — evita closure stale no realtime
   const currentUserRef = useRef<UserDB | null>(null);
@@ -672,20 +673,18 @@ export default function Home() {
   };
 
   const registrarChegada = async (pedido: LogPedido) => {
-    // Proteção dupla: processingRef (global) + chegadaEmProcessoRef (por log ID)
-    // Evita double-submit mesmo se o realtime reexibir o botão antes do banco confirmar
+    // Camada 1: state dispara re-render imediato — botão fica disabled antes de qualquer await
     if (processingRef.current) return;
-    if (chegadaEmProcessoRef.current.has(pedido.id)) return;
-    chegadaEmProcessoRef.current.add(pedido.id);
+    if (chegadaEmProcesso.has(pedido.id)) return;
+    setChegadaEmProcesso(prev => new Set(prev).add(pedido.id));
     processingRef.current = true; setIsProcessing(true);
     const backNow = new Date().toISOString();
-    // Optimistic: remove da lista ativa imediatamente — fecha a janela do double-click
+    // Optimistic: remove da lista ativa imediatamente
     setTodosLogsAtivos(prev => prev.filter(l => l.id !== pedido.id));
     // Atualiza cooldown localmente imediatamente
     setUltimoRetornoDoAluno({ ...pedido, status: "concluido", back_time: backNow });
     try {
-      // Guard no banco: confirma que o log ainda está como "saida" antes de processar
-      // Evita o caso raro onde o realtime já atualizou mas a UI ainda mostrava o botão
+      // Camada 2: guard no banco — confirma que o log ainda está como "saida"
       const { data: logAtual } = await supabase
         .from("logs")
         .select("id, status")
@@ -693,7 +692,7 @@ export default function Home() {
         .maybeSingle();
 
       if (!logAtual || logAtual.status !== "saida") {
-        // Já foi processado (por outro clique ou dispositivo) — apenas remove da UI
+        // Já foi processado — apenas mantém a UI limpa
         return;
       }
 
@@ -706,7 +705,7 @@ export default function Home() {
       setTodosLogsAtivos(prev => [pedido, ...prev]);
       setUltimoRetornoDoAluno(null);
     } finally {
-      chegadaEmProcessoRef.current.delete(pedido.id);
+      setChegadaEmProcesso(prev => { const s = new Set(prev); s.delete(pedido.id); return s; });
       processingRef.current = false; setIsProcessing(false);
     }
   };
@@ -1194,7 +1193,7 @@ export default function Home() {
                       ) : meuPedido.status === "saida" ? (
                         <div className="w-full space-y-5">
                           <p className="text-[#00579D] font-bold uppercase text-xl">Você está fora.</p>
-                          <button onClick={() => registrarChegada(meuPedido)} disabled={isProcessing || chegadaEmProcessoRef.current.has(meuPedido.id)} className="w-full bg-[#2B2B2B] text-white font-bold uppercase py-5 border-b-4 border-black active:border-b-0 active:translate-y-1 flex justify-center items-center gap-2 text-lg disabled:opacity-60 disabled:cursor-not-allowed"><CheckCircle2 size={24} />Confirmar Retorno</button>
+                          <button onClick={() => registrarChegada(meuPedido)} disabled={isProcessing || chegadaEmProcesso.has(meuPedido.id)} className="w-full bg-[#2B2B2B] text-white font-bold uppercase py-5 border-b-4 border-black active:border-b-0 active:translate-y-1 flex justify-center items-center gap-2 text-lg disabled:opacity-60 disabled:cursor-not-allowed"><CheckCircle2 size={24} />Confirmar Retorno</button>
                         </div>
                       ) : null}
                     </section>
