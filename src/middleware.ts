@@ -1,8 +1,7 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
-export async function proxy(request: NextRequest) {
-  // Inicializa a resposta para podermos manipular os cookies nela
+export async function middleware(request: NextRequest) {
   let response = NextResponse.next({
     request: {
       headers: request.headers,
@@ -35,17 +34,14 @@ export async function proxy(request: NextRequest) {
     }
   );
 
-  // IMPORTANTE: getUser() é o método mais seguro para proxy/middleware atual
   const { data: { user } } = await supabase.auth.getUser();
 
   const isLoginPage = request.nextUrl.pathname === "/login";
 
-  // Se NÃO estiver logado e tentar acessar uma rota protegida -> Manda pro login
   if (!user && !isLoginPage) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
-  // Se JÁ ESTIVER logado e tentar acessar o login -> Manda pra home
   if (user && isLoginPage) {
     return NextResponse.redirect(new URL("/", request.url));
   }
